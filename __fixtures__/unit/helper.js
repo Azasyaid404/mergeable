@@ -1,4 +1,5 @@
 const _ = require('lodash')
+const yaml = require('js-yaml')
 
 const throwNotFound = () => {
   let error = new Error('404 error')
@@ -12,9 +13,17 @@ module.exports = {
       repo: (properties) => { return Object.assign({ owner: 'owner', repo: 'repo' }, properties) },
       event: (options.event) ? options.event : 'pull_request',
       payload: {
+        sha: 'sha1',
         action: 'opened',
         repository: {
           full_name: 'name'
+        },
+        check_suite: {
+          pull_requests: [
+            {
+              number: 1
+            }
+          ]
         },
         pull_request: {
           user: {
@@ -26,6 +35,7 @@ module.exports = {
           milestone: (options.milestone) ? options.milestone : null,
           requested_reviewers: options.requestedReviewers ? options.requestedReviewers : [],
           base: {
+            repo: { full_name: options.baseRepo ? options.baseRepo : 'owner/test' },
             ref: 'baseRef',
             sha: 'sha2'
           },
@@ -33,9 +43,16 @@ module.exports = {
             ref: 'test',
             sha: 'sha1',
             repo: {
+              full_name: options.headRepo ? options.headRepo : 'owner/test',
               issues_url: 'testRepo/issues{/number}'
             }},
           assignees: (options.assignees) ? options.assignees : []
+        },
+        issue: {
+          user: {
+            login: 'creator'
+          },
+          number: (options.number) ? options.number : 1
         }
       },
       log: {
@@ -84,22 +101,39 @@ module.exports = {
             return {}
           }
         },
+        teams: {
+          listMembersInOrg: options.listMembers ? () => ({ data: options.listMembers }) : () => ({ data: [] })
+        },
         pulls: {
-          listFiles: () => {
-            if (_.isString(options.files && options.files[0])) {
-              return {
-                data: options.files.map(
-                  file => ({
-                    filename: file.filename || file,
-                    status: file.status || 'modified',
-                    additions: file.additions || 0,
-                    deletions: file.deletions || 0,
-                    changes: file.changes || 0
-                  })
-                )
+          listFiles: {
+            endpoint: {
+              merge: async () => {
+                if (_.isString(options.files && options.files[0])) {
+                  return {
+                    data: options.files.map(
+                      file => ({
+                        filename: file.filename || file,
+                        status: file.status || 'modified',
+                        additions: file.additions || 0,
+                        deletions: file.deletions || 0,
+                        changes: file.changes || 0
+                      })
+                    )
+                  }
+                } else {
+                  return { data: options.files ? options.files : [] }
+                }
               }
-            } else {
-              return { data: options.files && options.files }
+            }
+          },
+          list: () => ({
+            data: options.prList ? options.prList : []
+          }),
+          listCommits: {
+            endpoint: {
+              merge: async () => {
+                return { data: (options.commits) ? options.commits : [] }
+              }
             }
           },
           listReviews: {
@@ -109,6 +143,14 @@ module.exports = {
               }
             }
           },
+          checkIfMerged: async () => {
+            if (options.checkIfMerged === false) {
+              return throwNotFound()
+            } else {
+              return { status: 204 }
+            }
+          },
+          merge: jest.fn(),
           get: jest.fn()
         },
         paginate: jest.fn(async (fn, cb) => {
@@ -134,12 +176,19 @@ module.exports = {
               resolve({ status: 204 })
             })
           },
+          listComments: () => {
+            return { data: (options.listComments) ? options.listComments : [] }
+          },
+          replaceLabels: jest.fn(),
           addLabels: jest.fn(),
           update: jest.fn(),
           get: () => {
             return {data: (options.deepValidation) ? options.deepValidation : {}}
           }
         }
+      },
+      probotContext: {
+        config: jest.fn().mockResolvedValue(options.configJson)
       }
     }
   },
@@ -163,10 +212,8 @@ module.exports = {
         content: Buffer.from(configString).toString('base64') }
       })
     }
-    context.github.pulls.listFiles = () => {
-      return Promise.resolve({
-        data: options && options.files ? options.files.map(file => ({ filename: file, status: 'modified' })) : []
-      })
+    context.probotContext.config = () => {
+      return Promise.resolve(yaml.safeLoad(configString))
     }
   }
 }
